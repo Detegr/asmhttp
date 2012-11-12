@@ -1,11 +1,11 @@
 section .data
-	errmsg: db "Error", 10
+		errmsg: db "Error", 10
 	errlen: equ $-errmsg
 	acceptmsg: db "Connection accepted!", 10
 	acceptlen: equ $-acceptmsg
 	childmsg: db "Child process", 10
 	childlen: equ $-childmsg
-	sys_socket: dd 102
+	sys_socketcall: dd 102
 
 	HTTP_MAX: dd 8192
 section .bss
@@ -15,6 +15,12 @@ section .text
 global _start
 
 _start:
+	; Inform kernel that it should clean up our dead children
+	mov eax, 48 ; sys_signal
+	mov ebx, 17 ; SIGCHLD
+	mov ecx, 1  ; SIG_IGN
+	int 0x80
+
 	call socket
 	call bind
 	call listen
@@ -28,13 +34,13 @@ _start:
 socket:
 	push ebp
 	mov ebp, esp
-	sub esp, 16
+	sub esp, 32
 
 	mov dword [ebp-12], 2 ; AF_INET
 	mov dword [ebp-8], 1 ; SOCK_DGRAM
 	mov dword [ebp-4], 0
 
-	mov eax, [sys_socket] ; sys_socketcall
+	mov eax, [sys_socketcall] ; sys_socketcall
 	mov ebx, 1 ; socketcall(socket)
 	lea ecx, [ebp-12] ;
 	int 0x80
@@ -42,8 +48,30 @@ socket:
 	cmp eax, 0
 	jle fail
 
-	add esp, 16
 	mov dword [sock_fd], eax
+
+	; SYS_SETSOCKOPT == 14
+
+
+	mov dword [ebp-32], eax
+	mov dword [ebp-28], 1 ; SOL_SOCKET
+	mov dword [ebp-24], 2 ; SO_REUSEADDR
+	mov dword [ebp-4], 1
+
+	; void* optval
+	lea eax, [ebp-4]
+	mov dword [ebp-20], eax
+	mov dword [ebp-16], 4 ; optlen
+	
+	mov eax, [sys_socketcall]
+	mov ebx, 14 ; SYS_SETSOCKOPT
+	lea ecx, [ebp-32]
+	int 0x80
+
+	add esp, 32
+
+	cmp eax, 0
+	jne fail
 
 	leave
 	ret
@@ -67,7 +95,7 @@ bind:
 	mov [ebp-12], eax ; sockaddr ptr
 	mov dword [ebp-8], 16 ; sizeof(sockaddr)
 
-	mov eax, [sys_socket]
+	mov eax, [sys_socketcall]
 	mov ebx, 2; sys_bind
 	lea ecx, [ebp-16] ; args ptr
 	int 0x80
@@ -91,7 +119,7 @@ listen:
 	; set up arg[1]
 	mov dword [ebp-4], 10 ; backlog of 10 connections
 
-	mov dword eax, [sys_socket]
+	mov dword eax, [sys_socketcall]
 	mov ebx, 4 ; sys_listen
 	lea ecx, [ebp-8]
 	int 0x80
@@ -100,9 +128,10 @@ listen:
 	leave
 	ret
 
+; Close fd pushed to stack
 close:
+	pop ebx
 	mov eax, 6 ; sys_close
-	mov ebx, [sock_fd]
 	int 0x80
 	ret
 sleep:
@@ -130,13 +159,15 @@ loop:
 	mov dword [ebp-8], 0
 	mov dword [ebp-4], 0
 
-	mov eax, [sys_socket]
+		mov eax, [sys_socketcall]
 	mov ebx, 5 ; accept
 	lea ecx, [ebp-12]
 	int 0x80
 	
 	cmp eax, 0
 	jle fail
+
+	push eax ; store accepted fd
 
 	mov [ebp-80], ebx
 	mov [ebp-76], ecx
@@ -170,11 +201,22 @@ loop:
 	ret
 
 child:
+	pop ebx ; pop accepted fd to ebx
 	mov eax, 3 ; sys_read
-	mov ebx, 1  <<<<<<<<<<<
-	mov ecx, childmsg
-	mov edx, childlen
+	mov ecx, recvbuf
+	mov edx, HTTP_MAX
 	int 0x80
+
+	cmp eax, 0
+	push ebx
+	jl fail
+	je close
+	pop ebx
+
+	mov edx, eax
+	mov eax, 4 ; sys_write
+	mov ebx, 1 ; stdout
+	mov ecx, recvbuf
 
 	mov eax, 1
 	mov ebx, 0
