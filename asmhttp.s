@@ -7,6 +7,9 @@ section .data
 	childlen: equ $-childmsg
 	sys_socketcall: dd 102
 
+	ok_header: db "HTTP/1.1 200 OK", 13, 10, "Content-Type: text/html", 13, 10, "Content-Length: 12", 13, 10, 13, 10, "<h1>foo</h1>", 13, 10, 13 ,10
+	ok_len: equ $-ok_header
+
 	HTTP_MAX: dd 8192
 section .bss
 	sock_fd resd 1
@@ -154,14 +157,16 @@ loop:
 	push ebp
 	mov ebp, esp
 	sub esp, 80
+
 	mov eax, [sock_fd]
-	mov [ebp-12], eax
+	mov [ebp-16], eax
+	mov dword [ebp-12], 0
 	mov dword [ebp-8], 0
 	mov dword [ebp-4], 0
 
 	mov eax, [sys_socketcall]
 	mov ebx, 5 ; accept
-	lea ecx, [ebp-12]
+	lea ecx, [ebp-16]
 	int 0x80
 	
 	cmp eax, 0
@@ -209,7 +214,7 @@ child:
 	sub esp, 16
 
 	mov eax, [sys_socketcall]
-	mov ebx, 10 ; sys_read
+	mov ebx, 10 ; sys_recv
 
 	mov [ebp-16], ecx ; fd
 	mov dword [ebp-12], recvbuf
@@ -224,15 +229,26 @@ child:
 	mov ebx, [ebp-16]
 	push ebx
 	je close
-	pop ebx
 
-	mov edx, eax
-	mov eax, 4 ; sys_write
-	mov ebx, 1 ; stdout
-	mov ecx, recvbuf
+	mov dword [ebp-12], ok_header
+	mov dword [ebp-8], ok_len
+	mov eax, [sys_socketcall]
+	mov ebx, 11 ; sys_send
+	lea ecx, [ebp-16]
 	int 0x80
 
-	add esp, 16
+	cmp eax, 0
+	jl fail
+	mov ebx, [ebp-16]
+
+	push ebx
+	call close
+
+	;mov edx, eax
+	;mov eax, 4 ; sys_write
+	;mov ebx, 1 ; stdout
+	;mov ecx, recvbuf
+	;int 0x80
 
 	mov eax, 1
 	mov ebx, 0
