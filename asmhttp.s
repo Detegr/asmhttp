@@ -159,7 +159,7 @@ loop:
 	mov dword [ebp-8], 0
 	mov dword [ebp-4], 0
 
-		mov eax, [sys_socketcall]
+	mov eax, [sys_socketcall]
 	mov ebx, 5 ; accept
 	lea ecx, [ebp-12]
 	int 0x80
@@ -187,7 +187,7 @@ loop:
 	mov [ebp-20], esp
 	mov [ebp-16], ss
 
-	mov eax, 2
+	mov eax, 2 ; sys_fork
 	lea ebx, [ebp-80]
 	int 0x80
 
@@ -196,20 +196,33 @@ loop:
 	je child
 	jg accept_new
 
-	add esp, 12
 	leave
 	ret
 
 child:
-	pop ebx ; pop accepted fd to ebx
-	mov eax, 3 ; sys_read
-	mov ecx, recvbuf
-	mov edx, HTTP_MAX
+	pop ecx ; pop accepted fd to ebx
+	add esp, 80
+	leave
+
+	push ebp
+	mov ebp, esp
+	sub esp, 16
+
+	mov eax, [sys_socketcall]
+	mov ebx, 10 ; sys_read
+
+	mov [ebp-16], ecx ; fd
+	mov dword [ebp-12], recvbuf
+	mov ecx, [HTTP_MAX]
+	mov [ebp-8], ecx
+	mov dword [ebp-4], 0
+	lea ecx, [ebp-16]
 	int 0x80
 
 	cmp eax, 0
-	push ebx
 	jl fail
+	mov ebx, [ebp-16]
+	push ebx
 	je close
 	pop ebx
 
@@ -217,6 +230,9 @@ child:
 	mov eax, 4 ; sys_write
 	mov ebx, 1 ; stdout
 	mov ecx, recvbuf
+	int 0x80
+
+	add esp, 16
 
 	mov eax, 1
 	mov ebx, 0
@@ -229,7 +245,8 @@ accept_new:
 	mov edx, acceptlen
 	int 0x80
 
-	add esp, 12
+	add esp, 80
+
 	leave
 	jmp loop
 
